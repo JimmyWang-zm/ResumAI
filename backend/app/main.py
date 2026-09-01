@@ -2,6 +2,8 @@
 ResumAI Backend Application Entry Point
 """
 
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -10,6 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router as api_router
 from app.core.config import settings
 from app.services.jobs.job_manager import get_job_manager
+from app.services.rag import build_knowledge_base
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -17,6 +22,10 @@ async def lifespan(app: FastAPI):
     """Application lifecycle management"""
     # Startup
     print(f"{settings.APP_NAME} v{settings.APP_VERSION} starting...")
+    try:
+        await asyncio.to_thread(build_knowledge_base)
+    except Exception:
+        logger.warning("RAG knowledge base pre-warm skipped", exc_info=True)
     job_manager = get_job_manager()
     await job_manager.start()  # RA-82: start background job worker
     yield
