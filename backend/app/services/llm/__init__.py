@@ -20,6 +20,7 @@ from .schemas import (
     MatchBreakdown,
     MatchResult,
     OptimizeResult,
+    InterviewPrepResult,
 )
 from .llm_service import LLMService, get_llm_service
 
@@ -51,6 +52,7 @@ __all__ = [
     "MatchBreakdown",
     "MatchResult",
     "OptimizeResult",
+    "InterviewPrepResult",
     # Service
     "LLMService",
     "get_llm_service",

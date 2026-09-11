@@ -115,6 +115,7 @@ poetry add <package-name>
 | `/api/resume/analyze`  | POST   | Analyze resume and generate suggestions        |
 | `/api/resume/match`    | POST   | Calculate resume-job match score               |
 | `/api/resume/optimize` | POST   | Optimize and rewrite resume                    |
+| `/api/resume/interview-prep` | POST | Generate interview questions and study plan |
 
 ### Directory Responsibilities
 

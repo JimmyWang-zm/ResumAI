@@ -148,3 +148,69 @@ class ResumeOptimizeResponse(BaseModel):
     code: int = 200
     status: str = "ok"
     data: OptimizeResponseData
+
+
+# --- 4.2.5 Interview Prep from JD ---
+
+class ResumeInterviewPrepRequest(BaseModel):
+    """Request schema for interview preparation"""
+    session_id: Optional[str] = None
+    job_description: str
+    job_title: Optional[str] = None
+    company_name: Optional[str] = None
+
+
+class InterviewSkillGap(BaseModel):
+    """Skill gap item for interview prep"""
+    skill: str
+    status: str = Field(..., description="matched | partial | missing | unverified")
+    why_it_matters: str
+    how_to_prepare: str
+
+
+class InterviewQuestion(BaseModel):
+    """Likely interview question with coaching notes"""
+    category: str = Field(..., description="product | technical_frontend | technical_backend | data | behavioral | project | system")
+    difficulty: str = Field(..., description="easy | medium | hard")
+    question: str
+    intent: str
+    suggested_answer: str
+    follow_ups: List[str] = Field(default_factory=list)
+
+
+class InterviewProjectStory(BaseModel):
+    """STAR story aligned to the JD"""
+    title: str
+    situation: str
+    task: str
+    action: str
+    result: str
+    jd_alignment: str
+
+
+class InterviewStudyPlanItem(BaseModel):
+    """Short study-plan action for interview prep"""
+    topic: str
+    priority: str = Field(..., description="high | medium | low")
+    actions: List[str] = Field(default_factory=list)
+
+
+class InterviewPrepResponseData(BaseModel):
+    """Inner data for interview prep response"""
+    role_summary: str
+    self_intro: str
+    must_have_skills: List[str] = Field(default_factory=list)
+    nice_to_have_skills: List[str] = Field(default_factory=list)
+    skill_gaps: List[InterviewSkillGap] = Field(default_factory=list)
+    questions: List[InterviewQuestion] = Field(default_factory=list)
+    project_stories: List[InterviewProjectStory] = Field(default_factory=list)
+    questions_to_ask: List[str] = Field(default_factory=list)
+    study_plan: List[InterviewStudyPlanItem] = Field(default_factory=list)
+    interview_format_tips: List[str] = Field(default_factory=list)
+
+
+class ResumeInterviewPrepResponse(BaseModel):
+    """Response schema for interview preparation"""
+    code: int = 200
+    status: str = "ok"
+    data: InterviewPrepResponseData

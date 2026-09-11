@@ -28,6 +28,9 @@ function ResumeAnalysisPage() {
   const [analyzeLoadingSource, setAnalyzeLoadingSource] = useState(null)
   const [matchScore, setMatchScore] = useState(null)
   const [analyzeSignal, setAnalyzeSignal] = useState(0)
+  const [interviewSignal, setInterviewSignal] = useState(0)
+  const [isPreparingInterview, setIsPreparingInterview] = useState(false)
+  const [panelNonce, setPanelNonce] = useState(0)
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true)
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false)
 
@@ -58,6 +61,8 @@ function ResumeAnalysisPage() {
     setAnalyzeLoadingSource(null)
     setMatchScore(null)
     setAnalyzeSignal(0)
+    setInterviewSignal(0)
+    setIsPreparingInterview(false)
   }
 
   const handleUpload = async () => {
@@ -103,6 +108,8 @@ function ResumeAnalysisPage() {
     setAnalyzeLoadingSource(null)
     setMatchScore(null)
     setAnalyzeSignal(0)
+    setInterviewSignal(0)
+    setIsPreparingInterview(false)
   }
 
 
@@ -135,6 +142,9 @@ function ResumeAnalysisPage() {
       setAnalyzeLoadingSource(null)
       setMatchScore(null)
       setAnalyzeSignal(0)
+      setInterviewSignal(0)
+      setIsPreparingInterview(false)
+      setPanelNonce((value) => value + 1)
 
       const fileInput = document.querySelector('input[type="file"]');
       if (fileInput) fileInput.value = '';
@@ -209,6 +219,7 @@ function ResumeAnalysisPage() {
   }
 
   const canAnalyze = Boolean(sessionId && uploadedFile)
+  const canPrepareInterview = Boolean(jobDescription && jobDescription.trim().length >= 20)
 
   const handleAnalyzeStatusChange = (status) => {
     setIsAnalyzing(status)
@@ -223,6 +234,11 @@ function ResumeAnalysisPage() {
     setMatchScore(null)
     setAnalyzeLoadingSource(source)
     setAnalyzeSignal((value) => value + 1)
+  }
+
+  const triggerInterviewPrep = () => {
+    if (!canPrepareInterview || isAnalyzing || isPreparingInterview) return
+    setInterviewSignal((value) => value + 1)
   }
 
   return (
@@ -268,8 +284,10 @@ function ResumeAnalysisPage() {
         isUploading={isUploading}
         isAnalyzing={isAnalyzing}
         isAnalyzeLoading={isAnalyzing && analyzeLoadingSource === 'sidebar'}
+        isPreparingInterview={isPreparingInterview}
         uploadError={uploadError}
         canAnalyze={canAnalyze}
+        canPrepareInterview={canPrepareInterview}
         onCompanyNameChange={handleCompanyNameChange}
         onJobTitleChange={handleJobTitleChange}
         onJobDescriptionChange={handleJobDescriptionChange}
@@ -277,6 +295,7 @@ function ResumeAnalysisPage() {
         onRemoveFile={handleRemoveFile}
         onUpload={handleUpload}
         onAnalyze={() => triggerAnalyze('sidebar')}
+        onPrepareInterview={triggerInterviewPrep}
         onClearSession={handleClearSession}
         isOpen={leftSidebarOpen}
         onClose={() => setLeftSidebarOpen(false)}
@@ -284,7 +303,7 @@ function ResumeAnalysisPage() {
 
       {/* Center analysis area */}
       <AnalysisOutput
-        key={sessionId || 'empty'}
+        key={`${sessionId || 'empty'}-${panelNonce}`}
         sessionId={sessionId}
         canAnalyze={canAnalyze}
         jobDescription={jobDescription}
@@ -293,6 +312,8 @@ function ResumeAnalysisPage() {
         onMatchScoreUpdate={handleAnalysisComplete}
         onAnalyzeStatusChange={handleAnalyzeStatusChange}
         analyzeSignal={analyzeSignal}
+        interviewSignal={interviewSignal}
+        onInterviewStatusChange={setIsPreparingInterview}
       />
 
       <ResumePreview

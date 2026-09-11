@@ -207,3 +207,43 @@ export async function optimizeResume(sessionId, jobDescription = '', template = 
 
   return await response.json();
 }
+
+/**
+ * Generate interview preparation from a job description.
+ * Resume session is optional — JD-only prep is supported.
+ *
+ * @param {string} sessionId - Session ID (optional)
+ * @param {string} jobDescription - Job description text
+ * @param {string} jobTitle - Job title (optional)
+ * @param {string} companyName - Company name (optional)
+ * @returns {Promise<Object>} Interview prep payload
+ */
+export async function prepareInterview(sessionId, jobDescription, jobTitle = '', companyName = '') {
+  if (!jobDescription || typeof jobDescription !== 'string' || jobDescription.trim() === '') {
+    throw new Error('Job description is required for interview prep');
+  }
+
+  const body = {
+    job_description: jobDescription,
+    job_title: jobTitle,
+    company_name: companyName,
+  }
+  if (sessionId) {
+    body.session_id = sessionId
+  }
+
+  const response = await fetch(`${API_BASE_URL}/resumes/interview-prep`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Interview prep failed' }));
+    throw new Error(error.detail || error.message || `HTTP error! status: ${response.status}`);
+  }
+
+  return await response.json();
+}

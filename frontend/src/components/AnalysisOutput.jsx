@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import PropTypes from 'prop-types'
-import { matchResumeWithJob, analyzeResume } from '../utils/api'
+import { matchResumeWithJob, analyzeResume, prepareInterview } from '../utils/api'
+import InterviewPrep from './InterviewPrep'
 
 /**
  * Priority configuration mapping
@@ -58,11 +59,18 @@ function AnalysisOutput({
   onMatchScoreUpdate,
   onAnalyzeStatusChange,
   analyzeSignal,
+  interviewSignal,
+  onInterviewStatusChange,
 }) {
 
   const [analysisData, setAnalysisData] = useState(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [error, setError] = useState(null)
+  const [interviewData, setInterviewData] = useState(null)
+  const [isPreparingInterview, setIsPreparingInterview] = useState(false)
+  const [interviewError, setInterviewError] = useState(null)
+  const [activeTab, setActiveTab] = useState('analysis')
+  const hasMeaningfulJd = Boolean(jobDescription && jobDescription.trim().length >= 20)
   const shouldUseMatch =
     Boolean(jobDescription && jobDescription.trim()) ||
     Boolean(companyName && companyName.trim()) ||
@@ -160,29 +168,91 @@ function AnalysisOutput({
     }
   }, [analyzeSignal])
 
+  const handleInterviewPrep = async () => {
+    if (isPreparingInterview) return
+
+    if (!hasMeaningfulJd) {
+      setInterviewError('Please paste a job description first')
+      setActiveTab('interview')
+      return
+    }
+
+    setIsPreparingInterview(true)
+    onInterviewStatusChange?.(true)
+    setInterviewError(null)
+    setInterviewData(null)
+    setActiveTab('interview')
+
+    try {
+      const result = await prepareInterview(
+        sessionId || '',
+        jobDescription,
+        jobTitle || '',
+        companyName || ''
+      )
+      setInterviewData(result.data || null)
+    } catch (err) {
+      console.error('Interview prep error:', err)
+      setInterviewError(err.message || 'Failed to prepare interview')
+    } finally {
+      setIsPreparingInterview(false)
+      onInterviewStatusChange?.(false)
+    }
+  }
+
+  useEffect(() => {
+    if (interviewSignal > 0) {
+      handleInterviewPrep()
+    }
+  }, [interviewSignal])
+
   return (
     <main className="flex-1 p-6 bg-gray-50 overflow-y-auto">
       <div className="max-w-3xl mx-auto">
         {/* Header */}
         <div className="mb-6">
           <h1 className="text-xl font-bold text-gray-800">
-            {analysisData?.type === 'match' ? 'Match Analysis' : 'Resume Analysis'}
+            {activeTab === 'interview' ? 'Interview Prep' : (analysisData?.type === 'match' ? 'Match Analysis' : 'Resume Analysis')}
           </h1>
+          {(analysisData && interviewData) && (
+            <div className="mt-3 inline-flex rounded-lg border border-gray-200 bg-white p-1">
+              <button
+                type="button"
+                onClick={() => setActiveTab('analysis')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md ${activeTab === 'analysis' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:text-gray-900'}`}
+              >
+                Analysis
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('interview')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md ${activeTab === 'interview' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:text-gray-900'}`}
+              >
+                Interview Prep
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Loading State - RA-59: Show spinner while analysis is in progress */}
-        {isAnalyzing && (
+        {/* Loading State */}
+        {(isAnalyzing || isPreparingInterview) && (
           <div className="bg-white rounded-lg shadow p-8 text-center">
             <div className="mb-5">
-              <div className="w-16 h-16 mx-auto border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin" role="status" aria-label="Analyzing" />
+              <div className="w-16 h-16 mx-auto border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin" role="status" aria-label={isPreparingInterview ? 'Preparing interview' : 'Analyzing'} />
             </div>
-            <h2 className="text-lg font-semibold text-gray-800 mb-2">Analyzing...</h2>
-            <p className="text-gray-600 text-sm">Please wait while we analyze your resume</p>
+            <h2 className="text-lg font-semibold text-gray-800 mb-2">
+              {isPreparingInterview ? 'Preparing interview...' : 'Analyzing...'}
+            </h2>
+            <p className="text-gray-600 text-sm">
+              {isPreparingInterview
+                ? 'Building questions, STAR stories, and a study plan from this JD'
+                : 'Please wait while we analyze your resume'}
+            </p>
           </div>
         )}
 
-        {/* Empty State - Show when no analysis yet and not loading */}
-        {!analysisData && !isAnalyzing && (
+        {/* Empty State */}
+        {!analysisData && !interviewData && !isAnalyzing && !isPreparingInterview && (
           <div className="bg-white rounded-lg shadow p-8 text-center">
             <div className="mb-4">
               <svg className="w-16 h-16 mx-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" role="img" aria-label="Resume icon">
@@ -190,23 +260,26 @@ function AnalysisOutput({
               </svg>
             </div>
             <h2 className="text-lg font-semibold text-gray-800 mb-2">
-              {shouldUseMatch ? 'Ready to Match Resume' : 'Ready to Analyze Resume'}
+              {hasMeaningfulJd ? 'Ready to Match or Prepare Interview' : (shouldUseMatch ? 'Ready to Match Resume' : 'Ready to Analyze Resume')}
             </h2>
             <p className="text-gray-600 mb-6 text-sm">
-              {!canAnalyze && 'Please upload your resume to get started'}
+              {!canAnalyze && !hasMeaningfulJd && 'Please upload your resume to get started'}
+              {!canAnalyze && hasMeaningfulJd && 'Use Prepare Interview in the left panel, or upload a resume to match'}
               {canAnalyze && !shouldUseMatch && 'Use the Analyze button in the left panel'}
-              {canAnalyze && shouldUseMatch && 'Use the Match Resume button in the left panel'}
+              {canAnalyze && shouldUseMatch && (hasMeaningfulJd
+                ? 'Use Match Resume or Prepare Interview in the left panel'
+                : 'Use the Match Resume button in the left panel')}
             </p>
-            {error && (
+            {(error || interviewError) && (
               <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-                <p className="text-red-600 text-sm">{error}</p>
+                <p className="text-red-600 text-sm">{interviewError || error}</p>
               </div>
             )}
           </div>
         )}
 
         {/* Analysis Results */}
-        {analysisData && (
+        {analysisData && !isAnalyzing && !isPreparingInterview && activeTab === 'analysis' && (
           <div className="space-y-4">
             {/* Scoring Principles - Only for match type */}
             {analysisData.type === 'match' && (
@@ -302,6 +375,16 @@ function AnalysisOutput({
 
           </div>
         )}
+
+        {interviewError && !isPreparingInterview && activeTab === 'interview' && !interviewData && analysisData && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <p className="text-red-600 text-sm">{interviewError}</p>
+          </div>
+        )}
+
+        {interviewData && !isAnalyzing && !isPreparingInterview && activeTab === 'interview' && (
+          <InterviewPrep data={interviewData} />
+        )}
       </div>
     </main>
   )
@@ -316,6 +399,8 @@ AnalysisOutput.propTypes = {
   onMatchScoreUpdate: PropTypes.func,
   onAnalyzeStatusChange: PropTypes.func,
   analyzeSignal: PropTypes.number,
+  interviewSignal: PropTypes.number,
+  onInterviewStatusChange: PropTypes.func,
 }
 
 export default AnalysisOutput

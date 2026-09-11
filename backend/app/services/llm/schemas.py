@@ -145,3 +145,62 @@ class OptimizeResult:
         ... )
     """
     optimized_content: str = ""
+
+
+@dataclass
+class InterviewSkillGap:
+    """Skill gap item used in interview preparation."""
+    skill: str
+    status: str
+    why_it_matters: str
+    how_to_prepare: str
+
+
+@dataclass
+class InterviewQuestion:
+    """A likely interview question with coaching notes."""
+    category: str
+    difficulty: str
+    question: str
+    intent: str
+    suggested_answer: str
+    follow_ups: List[str] = field(default_factory=list)
+
+
+@dataclass
+class InterviewProjectStory:
+    """STAR story aligned to a job description."""
+    title: str
+    situation: str
+    task: str
+    action: str
+    result: str
+    jd_alignment: str
+
+
+@dataclass
+class InterviewStudyPlanItem:
+    """A focused study-plan item for interview prep."""
+    topic: str
+    priority: str
+    actions: List[str] = field(default_factory=list)
+
+
+@dataclass
+class InterviewPrepResult:
+    """
+    Result from interview-prep generation.
+
+    Contains role snapshot, skill gaps, likely questions, STAR stories,
+    and a short study plan tailored to the job description.
+    """
+    role_summary: str = ""
+    self_intro: str = ""
+    must_have_skills: List[str] = field(default_factory=list)
+    nice_to_have_skills: List[str] = field(default_factory=list)
+    skill_gaps: List[InterviewSkillGap] = field(default_factory=list)
+    questions: List[InterviewQuestion] = field(default_factory=list)
+    project_stories: List[InterviewProjectStory] = field(default_factory=list)
+    questions_to_ask: List[str] = field(default_factory=list)
+    study_plan: List[InterviewStudyPlanItem] = field(default_factory=list)
+    interview_format_tips: List[str] = field(default_factory=list)

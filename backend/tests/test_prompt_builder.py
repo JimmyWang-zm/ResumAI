@@ -126,3 +126,46 @@ class TestGetPromptBuilder:
 
         assert "Test Resume" in prompt
 
+
+class TestInterviewPrepPrompt:
+    """Tests for JD-based interview prep prompt generation."""
+
+    def setup_method(self):
+        import app.services.prompt.builder as builder_module
+        builder_module._prompt_builder = None
+
+    def test_build_interview_prep_prompt_includes_jd_and_resume(self):
+        builder = PromptBuilder()
+        prompt = builder.build_interview_prep_prompt(
+            job_description="We need a product engineer intern who can write PRDs and ship React apps.",
+            resume_content="Jane built a campus React demo.",
+            job_title="Product Engineer Intern",
+            company_name="Example Co",
+        )
+
+        assert "We need a product engineer intern" in prompt
+        assert "Jane built a campus React demo." in prompt
+        assert "Product Engineer Intern" in prompt
+        assert "Example Co" in prompt
+        assert "role_summary" in prompt
+        assert "SAME LANGUAGE" in prompt
+
+    def test_build_interview_prep_prompt_without_resume(self):
+        builder = PromptBuilder()
+        prompt = builder.build_interview_prep_prompt(
+            job_description="We need a product engineer intern who can write PRDs and ship React apps."
+        )
+
+        assert "No resume provided." in prompt
+        assert "Not specified" in prompt
+
+    def test_build_interview_prep_prompt_rejects_empty_jd(self):
+        builder = PromptBuilder()
+        with pytest.raises(ValueError, match="job_description cannot be empty"):
+            builder.build_interview_prep_prompt("")
+
+    def test_build_interview_prep_prompt_rejects_short_jd(self):
+        builder = PromptBuilder()
+        with pytest.raises(ValueError, match="too short"):
+            builder.build_interview_prep_prompt("short jd")
+

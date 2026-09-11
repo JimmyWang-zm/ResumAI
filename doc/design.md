@@ -37,6 +37,7 @@
   [4.2.2 Analyze Resume](#422-analyze-resume)  
   [4.2.3 Match Resume with Job Description](#423-match-resume-with-job-description)  
   [4.2.4 Optimize Resume](#424-optimize-resume)  
+  [4.2.5 Interview Prep from Job Description](#425-interview-prep-from-job-description)  
  [4.3 HTTP Status Codes](#43-http-status-codes)  
 
 [**5. UI design**](#5-ui-design)  
@@ -219,6 +220,7 @@ Key Components:
 | **POST** | `/api/resumes/analyze`  | Analyze Resume          | session_id                  | suggestions              |
 | **POST** | `/api/resumes/match`    | Match with JD           | session_id, job_description | match_score, suggestions |
 | **POST** | `/api/resumes/optimize` | Generate optimized file | session_id, JD (optional)   | encoded_file             |
+| **POST** | `/api/resumes/interview-prep` | Interview prep from JD | job_description, session_id (optional) | questions, STAR stories, study plan |
 
 ### 4.2 API Endpoints
 
@@ -368,6 +370,49 @@ Response (200 OK):
 Error Responses:
 * `400 Bad Request`: Invalid parameters
 * `404 Not Found`: Resume not found
+* `500 Internal Server Error`: Server error
+
+---
+
+#### 4.2.5 Interview Prep from Job Description
+
+Endpoint: `POST /api/resumes/interview-prep`
+
+Description: Generates interview preparation from a job description. Resume personalization is optional — if `session_id` is omitted, the response is JD-only coaching. Output language matches the JD.
+
+Request Body (JSON):
+```json
+{
+  "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "job_description": "负责需求调研、原型绘制、PRD 输出...",
+  "job_title": "产品研发实习生",
+  "company_name": "Example Co"
+}
+```
+
+Response (200 OK):
+```json
+{
+  "code": 200,
+  "status": "ok",
+  "data": {
+    "role_summary": "产品+研发双修实习生...",
+    "self_intro": "60-90 second introduction",
+    "must_have_skills": ["Figma", "SQL"],
+    "nice_to_have_skills": ["Git"],
+    "skill_gaps": [],
+    "questions": [],
+    "project_stories": [],
+    "questions_to_ask": [],
+    "study_plan": [],
+    "interview_format_tips": []
+  }
+}
+```
+
+Error Responses:
+* `400 Bad Request`: Missing/invalid job description
+* `404 Not Found`: Resume not found (only when session_id is provided)
 * `500 Internal Server Error`: Server error
 
 ### 4.3 HTTP Status Codes

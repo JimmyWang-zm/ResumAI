@@ -13,6 +13,8 @@ from app.schemas.resume_schema import (
     ResumeMatchResponse,
     ResumeOptimizeRequest,
     ResumeOptimizeResponse,
+    ResumeInterviewPrepRequest,
+    ResumeInterviewPrepResponse,
     ResumeUploadResponse,
     AnalyzeResponseData,
     AnalyzeSuggestion,
@@ -20,6 +22,11 @@ from app.schemas.resume_schema import (
     MatchBreakdown,
     MatchSuggestion,
     OptimizeResponseData,
+    InterviewPrepResponseData,
+    InterviewSkillGap,
+    InterviewQuestion,
+    InterviewProjectStory,
+    InterviewStudyPlanItem,
 )
 from app.services.resume_service import get_resume_content, upload_resume_to_gcs
 from app.services.pdf_service import markdown_to_pdf
@@ -34,6 +41,7 @@ from app.services.validators.content_moderator import ContentModerationError
 from app.services.validators.content_moderator import get_content_moderator
 from app.core.error_templates import (
     RESUME_EMPTY_CONTENT,
+    MISSING_JOB_DESCRIPTION,
     CONTENT_MODERATION_INPUT_BLOCKED,
     CONTENT_MODERATION_OUTPUT_BLOCKED,
     LLM_SERVICE_UNAVAILABLE,
@@ -336,4 +344,142 @@ async def optimize_resume(request: ResumeOptimizeRequest):
         raise HTTPException(
             status_code=INTERNAL_SERVER_ERROR.code,
             detail=INTERNAL_SERVER_ERROR.detail
+        ) from e
+
+
+@router.post("/interview-prep", response_model=ResumeInterviewPrepResponse)
+async def prepare_interview(request: ResumeInterviewPrepRequest):
+    """
+    Generate interview preparation from a job description.
+
+    Resume content is optional: if session_id is provided, answers are
+    personalized to the uploaded resume. Otherwise the response is JD-only.
+    """
+    try:
+        job_description = (request.job_description or "").strip()
+        if not job_description:
+            raise HTTPException(
+                status_code=MISSING_JOB_DESCRIPTION.code,
+                detail=MISSING_JOB_DESCRIPTION.detail,
+            )
+
+        resume_content = ""
+        session_id = (request.session_id or "").strip()
+        if session_id:
+            resume_content = await get_resume_content(session_id)
+            if not resume_content or not resume_content.strip():
+                raise HTTPException(
+                    status_code=RESUME_EMPTY_CONTENT.code,
+                    detail=RESUME_EMPTY_CONTENT.detail,
+                )
+
+        moderator = get_content_moderator()
+        is_safe, reason = moderator.check_input(job_description)
+        if not is_safe:
+            raise HTTPException(
+                status_code=CONTENT_MODERATION_INPUT_BLOCKED.code,
+                detail=reason,
+            )
+        if resume_content:
+            is_safe, reason = moderator.check_input(resume_content)
+            if not is_safe:
+                raise HTTPException(
+                    status_code=CONTENT_MODERATION_INPUT_BLOCKED.code,
+                    detail=reason,
+                )
+
+        builder = get_prompt_builder()
+        prompt = builder.build_interview_prep_prompt(
+            job_description=job_description,
+            resume_content=resume_content,
+            job_title=request.job_title,
+            company_name=request.company_name,
+        )
+
+        llm = get_llm_service()
+        result = await llm.prepare_interview(prompt)
+
+        return ResumeInterviewPrepResponse(
+            code=200,
+            status="ok",
+            data=InterviewPrepResponseData(
+                role_summary=result.role_summary,
+                self_intro=result.self_intro,
+                must_have_skills=result.must_have_skills,
+                nice_to_have_skills=result.nice_to_have_skills,
+                skill_gaps=[
+                    InterviewSkillGap(
+                        skill=item.skill,
+                        status=item.status,
+                        why_it_matters=item.why_it_matters,
+                        how_to_prepare=item.how_to_prepare,
+                    )
+                    for item in result.skill_gaps
+                ],
+                questions=[
+                    InterviewQuestion(
+                        category=item.category,
+                        difficulty=item.difficulty,
+                        question=item.question,
+                        intent=item.intent,
+                        suggested_answer=item.suggested_answer,
+                        follow_ups=item.follow_ups,
+                    )
+                    for item in result.questions
+                ],
+                project_stories=[
+                    InterviewProjectStory(
+                        title=item.title,
+                        situation=item.situation,
+                        task=item.task,
+                        action=item.action,
+                        result=item.result,
+                        jd_alignment=item.jd_alignment,
+                    )
+                    for item in result.project_stories
+                ],
+                questions_to_ask=result.questions_to_ask,
+                study_plan=[
+                    InterviewStudyPlanItem(
+                        topic=item.topic,
+                        priority=item.priority,
+                        actions=item.actions,
+                    )
+                    for item in result.study_plan
+                ],
+                interview_format_tips=result.interview_format_tips,
+            ),
+        )
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        ) from e
+    except ContentModerationError as e:
+        raise HTTPException(
+            status_code=CONTENT_MODERATION_OUTPUT_BLOCKED.code,
+            detail=e.message,
+        ) from e
+    except LLMServiceUnavailableError as e:
+        raise HTTPException(
+            status_code=LLM_SERVICE_UNAVAILABLE.code,
+            detail=LLM_SERVICE_UNAVAILABLE.detail,
+        ) from e
+    except LLMResponseError as e:
+        raise HTTPException(
+            status_code=LLM_INVALID_RESPONSE.code,
+            detail=LLM_INVALID_RESPONSE.detail,
+        ) from e
+    except LLMException as e:
+        raise HTTPException(
+            status_code=LLM_GENERIC_ERROR.code,
+            detail=LLM_GENERIC_ERROR.detail,
+        ) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=INTERNAL_SERVER_ERROR.code,
+            detail=INTERNAL_SERVER_ERROR.detail,
         ) from e

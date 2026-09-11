@@ -10,6 +10,7 @@ from .templates import (
     MATCH_PROMPT_TEMPLATE,
     OPTIMIZE_NO_JD_PROMPT_TEMPLATE,
     OPTIMIZE_WITH_JD_PROMPT_TEMPLATE,
+    INTERVIEW_PREP_PROMPT_TEMPLATE,
     SAFETY_INSTRUCTION,
 )
 
@@ -111,6 +112,29 @@ class PromptBuilder:
                 resume_content=resume_content.strip(),
                 template=template,
             )
+
+    def build_interview_prep_prompt(
+        self,
+        job_description: str,
+        resume_content: Optional[str] = None,
+        job_title: Optional[str] = None,
+        company_name: Optional[str] = None,
+    ) -> str:
+        """Build a prompt for JD-based interview preparation."""
+        if not job_description or not job_description.strip():
+            raise ValueError("job_description cannot be empty")
+
+        self._validate_job_description(job_description)
+
+        resume_text = (resume_content or "").strip() or "No resume provided."
+
+        return INTERVIEW_PREP_PROMPT_TEMPLATE.format(
+            safety_instruction=SAFETY_INSTRUCTION,
+            company_name=(company_name or "").strip() or "Not specified",
+            job_title=(job_title or "").strip() or "Not specified",
+            job_description=job_description.strip(),
+            resume_content=resume_text,
+        )
 
 
 # Singleton instance

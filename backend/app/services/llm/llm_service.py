@@ -9,6 +9,7 @@ import re
 from functools import lru_cache
 from typing import Optional
 
+from .exceptions import LLMResponseError
 from .factory import get_llm_provider
 from .base import BaseLLMProvider
 from .schemas import (
@@ -17,6 +18,11 @@ from .schemas import (
     MatchBreakdown,
     MatchResult,
     OptimizeResult,
+    InterviewSkillGap,
+    InterviewQuestion,
+    InterviewProjectStory,
+    InterviewStudyPlanItem,
+    InterviewPrepResult,
 )
 from app.services.validators.content_moderator import (
     get_content_moderator,
@@ -86,6 +92,134 @@ class LLMService:
         cleaned_content = self._clean_optimize_output(response.content)
 
         return OptimizeResult(optimized_content=cleaned_content)
+
+    async def prepare_interview(self, prompt: str) -> InterviewPrepResult:
+        """Generate structured interview preparation from a JD (and optional resume)."""
+        response = await self.provider.analyze(prompt, "")
+
+        moderator = get_content_moderator()
+        is_safe, reason = moderator.check_output(response.content)
+        if not is_safe:
+            logger.warning(f"LLM interview-prep output blocked: {reason}")
+            raise ContentModerationError(reason)
+
+        return self._parse_interview_prep(response.content)
+
+    _SKILL_GAP_STATUSES = {"matched", "partial", "missing", "unverified"}
+    _QUESTION_CATEGORIES = {
+        "product",
+        "technical_frontend",
+        "technical_backend",
+        "data",
+        "behavioral",
+        "project",
+        "system",
+    }
+    _DIFFICULTIES = {"easy", "medium", "hard"}
+    _PRIORITIES = {"high", "medium", "low"}
+
+    def _parse_interview_prep(self, content: str) -> InterviewPrepResult:
+        """Parse interview-prep JSON from an LLM response."""
+        json_data = self._extract_json(content)
+        if not json_data or not isinstance(json_data, dict):
+            raise LLMResponseError("Failed to parse interview prep response")
+
+        skill_gaps = []
+        for item in json_data.get("skill_gaps") or []:
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status", "unverified")).lower()
+            if status not in self._SKILL_GAP_STATUSES:
+                status = "unverified"
+            skill_gaps.append(
+                InterviewSkillGap(
+                    skill=str(item.get("skill", "")).strip(),
+                    status=status,
+                    why_it_matters=str(item.get("why_it_matters", "")).strip(),
+                    how_to_prepare=str(item.get("how_to_prepare", "")).strip(),
+                )
+            )
+
+        questions = []
+        for item in json_data.get("questions") or []:
+            if not isinstance(item, dict):
+                continue
+            category = str(item.get("category", "behavioral")).lower()
+            if category not in self._QUESTION_CATEGORIES:
+                category = "behavioral"
+            difficulty = str(item.get("difficulty", "medium")).lower()
+            if difficulty not in self._DIFFICULTIES:
+                difficulty = "medium"
+            follow_ups = item.get("follow_ups") or []
+            if not isinstance(follow_ups, list):
+                follow_ups = [str(follow_ups)]
+            questions.append(
+                InterviewQuestion(
+                    category=category,
+                    difficulty=difficulty,
+                    question=str(item.get("question", "")).strip(),
+                    intent=str(item.get("intent", "")).strip(),
+                    suggested_answer=str(item.get("suggested_answer", "")).strip(),
+                    follow_ups=[str(f).strip() for f in follow_ups if str(f).strip()],
+                )
+            )
+
+        project_stories = []
+        for item in json_data.get("project_stories") or []:
+            if not isinstance(item, dict):
+                continue
+            project_stories.append(
+                InterviewProjectStory(
+                    title=str(item.get("title", "")).strip(),
+                    situation=str(item.get("situation", "")).strip(),
+                    task=str(item.get("task", "")).strip(),
+                    action=str(item.get("action", "")).strip(),
+                    result=str(item.get("result", "")).strip(),
+                    jd_alignment=str(item.get("jd_alignment", "")).strip(),
+                )
+            )
+
+        study_plan = []
+        for item in json_data.get("study_plan") or []:
+            if not isinstance(item, dict):
+                continue
+            priority = str(item.get("priority", "medium")).lower()
+            if priority not in self._PRIORITIES:
+                priority = "medium"
+            actions = item.get("actions") or []
+            if not isinstance(actions, list):
+                actions = [str(actions)]
+            study_plan.append(
+                InterviewStudyPlanItem(
+                    topic=str(item.get("topic", "")).strip(),
+                    priority=priority,
+                    actions=[str(a).strip() for a in actions if str(a).strip()],
+                )
+            )
+
+        def _string_list(key: str) -> list[str]:
+            values = json_data.get(key) or []
+            if not isinstance(values, list):
+                return [str(values)] if str(values).strip() else []
+            return [str(v).strip() for v in values if str(v).strip()]
+
+        result = InterviewPrepResult(
+            role_summary=str(json_data.get("role_summary", "")).strip(),
+            self_intro=str(json_data.get("self_intro", "")).strip(),
+            must_have_skills=_string_list("must_have_skills"),
+            nice_to_have_skills=_string_list("nice_to_have_skills"),
+            skill_gaps=[g for g in skill_gaps if g.skill],
+            questions=[q for q in questions if q.question],
+            project_stories=[s for s in project_stories if s.title or s.situation],
+            questions_to_ask=_string_list("questions_to_ask"),
+            study_plan=[p for p in study_plan if p.topic],
+            interview_format_tips=_string_list("interview_format_tips"),
+        )
+
+        if not result.role_summary and not result.questions:
+            raise LLMResponseError("Interview prep response was empty")
+
+        return result
 
     def _parse_suggestions(
         self,

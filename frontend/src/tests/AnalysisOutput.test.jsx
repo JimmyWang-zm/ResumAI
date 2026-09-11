@@ -5,9 +5,10 @@ import AnalysisOutput from '../components/AnalysisOutput'
 jest.mock('../utils/api', () => ({
   analyzeResume: jest.fn(),
   matchResumeWithJob: jest.fn(),
+  prepareInterview: jest.fn(),
 }))
 
-import { analyzeResume, matchResumeWithJob } from '../utils/api'
+import { analyzeResume, matchResumeWithJob, prepareInterview } from '../utils/api'
 
 describe('AnalysisOutput Component', () => {
   beforeEach(() => {
@@ -27,7 +28,7 @@ describe('AnalysisOutput Component', () => {
       expect(screen.queryByRole('button', { name: /Analyze Resume/i })).not.toBeInTheDocument()
     })
 
-    test('renders left-panel match hint when JD exists', () => {
+    test('renders left-panel match and interview hint when JD exists', () => {
       render(
         <AnalysisOutput
           sessionId="test-session-123"
@@ -37,8 +38,8 @@ describe('AnalysisOutput Component', () => {
         />
       )
 
-      expect(screen.getByText(/Ready to Match Resume/i)).toBeInTheDocument()
-      expect(screen.getByText(/Use the Match Resume button in the left panel/i)).toBeInTheDocument()
+      expect(screen.getByText(/Ready to Match or Prepare Interview/i)).toBeInTheDocument()
+      expect(screen.getByText(/Use Match Resume or Prepare Interview in the left panel/i)).toBeInTheDocument()
     })
   })
 
@@ -191,6 +192,83 @@ describe('AnalysisOutput Component', () => {
 
       await waitFor(() => {
         expect(onMatchScoreUpdate).toHaveBeenCalledWith(85)
+      })
+    })
+  })
+
+  describe('Interview Prep', () => {
+    test('calls prepareInterview when interviewSignal increases', async () => {
+      prepareInterview.mockResolvedValue({
+        data: {
+          role_summary: 'Hybrid product-engineering intern',
+          self_intro: 'I am a 2027 graduate.',
+          questions: [],
+        },
+      })
+
+      const props = {
+        sessionId: 'test-session-123',
+        canAnalyze: true,
+        jobDescription: 'Senior Software Engineer position with product work',
+        jobTitle: 'Product Engineer Intern',
+        companyName: 'Example Co',
+      }
+      const { rerender } = render(<AnalysisOutput {...props} interviewSignal={0} />)
+      rerender(<AnalysisOutput {...props} interviewSignal={1} />)
+
+      await waitFor(() => {
+        expect(prepareInterview).toHaveBeenCalledWith(
+          'test-session-123',
+          'Senior Software Engineer position with product work',
+          'Product Engineer Intern',
+          'Example Co'
+        )
+      })
+    })
+
+    test('displays interview prep content after request', async () => {
+      prepareInterview.mockResolvedValue({
+        data: {
+          role_summary: 'Hybrid product-engineering intern',
+          self_intro: 'I am a 2027 graduate.',
+          questions: [
+            {
+              category: 'product',
+              difficulty: 'medium',
+              question: 'How do you write a PRD?',
+              intent: 'Product thinking',
+              suggested_answer: 'Start from the user problem.',
+            },
+          ],
+        },
+      })
+
+      const props = {
+        sessionId: 'test-session-123',
+        canAnalyze: true,
+        jobDescription: 'Senior Software Engineer position with product work',
+      }
+      const { rerender } = render(<AnalysisOutput {...props} interviewSignal={0} />)
+      rerender(<AnalysisOutput {...props} interviewSignal={1} />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Interview Prep/i)).toBeInTheDocument()
+        expect(screen.getByText(/How do you write a PRD/i)).toBeInTheDocument()
+        expect(screen.getByText(/Hybrid product-engineering intern/i)).toBeInTheDocument()
+      })
+    })
+
+    test('shows error when interview prep fails', async () => {
+      prepareInterview.mockRejectedValue(new Error('Interview prep failed'))
+
+      const props = {
+        jobDescription: 'Senior Software Engineer position with product work',
+      }
+      const { rerender } = render(<AnalysisOutput {...props} interviewSignal={0} />)
+      rerender(<AnalysisOutput {...props} interviewSignal={1} />)
+
+      await waitFor(() => {
+        expect(screen.getByText(/Interview prep failed/i)).toBeInTheDocument()
       })
     })
   })
