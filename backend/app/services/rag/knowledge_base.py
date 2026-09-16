@@ -1,5 +1,8 @@
 """
-Curated resume knowledge base backed by ChromaDB.
+Curated resume knowledge base with in-memory embeddings.
+
+Uses Gemini embeddings + numpy cosine similarity. Avoids ChromaDB/onnxruntime
+so CI (Python 3.10) and Cloud Run (512Mi) stay lean for a 10-document seed set.
 """
 
 from __future__ import annotations
@@ -8,21 +11,21 @@ import hashlib
 import json
 import logging
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import chromadb
+import numpy as np
 
 from .embedder import GeminiEmbedder
 
 logger = logging.getLogger(__name__)
 
-CHROMA_PERSIST_DIR = Path(__file__).resolve().parents[3] / ".chroma_db"
-COLLECTION_NAME = "resume_knowledge"
-DOCUMENTS_HASH_KEY = "documents_hash"
+PERSIST_DIR = Path(__file__).resolve().parents[3] / ".rag_store"
+STORE_FILENAME = "resume_knowledge.json"
 
-_collection: Optional[chromadb.Collection] = None
-_collection_lock = threading.Lock()
+_store: Optional["KnowledgeStore"] = None
+_store_lock = threading.Lock()
 
 KNOWLEDGE_DOCUMENTS = [
     {
@@ -141,8 +144,50 @@ KNOWLEDGE_DOCUMENTS = [
 ]
 
 
+@dataclass
+class KnowledgeStore:
+    """In-memory resume guidance corpus with precomputed embeddings."""
+
+    documents_hash: str
+    ids: list[str]
+    documents: list[str]
+    metadatas: list[dict]
+    embeddings: np.ndarray
+
+    def count(self) -> int:
+        return len(self.documents)
+
+    def query(
+        self,
+        query_embedding: list[float],
+        top_k: int = 3,
+    ) -> tuple[list[str], list[dict], list[float]]:
+        """Return top-k documents by cosine similarity (higher is better)."""
+        if self.count() == 0:
+            return [], [], []
+
+        query = np.asarray(query_embedding, dtype=np.float64)
+        query_norm = np.linalg.norm(query)
+        if query_norm == 0:
+            return [], [], []
+
+        matrix = self.embeddings
+        doc_norms = np.linalg.norm(matrix, axis=1)
+        valid = doc_norms > 0
+        scores = np.zeros(len(matrix), dtype=np.float64)
+        scores[valid] = (matrix[valid] @ query) / (doc_norms[valid] * query_norm)
+
+        k = min(top_k, self.count())
+        top_indices = np.argsort(-scores)[:k]
+        documents = [self.documents[i] for i in top_indices]
+        metadatas = [self.metadatas[i] for i in top_indices]
+        # Distance-style metric for logging (1 - cosine), matching prior Chroma habit
+        distances = [float(1.0 - scores[i]) for i in top_indices]
+        return documents, metadatas, distances
+
+
 def compute_documents_hash() -> str:
-    """Stable hash of the curated document set (ids + content)."""
+    """Stable hash of the curated document set."""
     payload = [
         {
             "id": doc["id"],
@@ -157,55 +202,83 @@ def compute_documents_hash() -> str:
 
 
 def reset_knowledge_base() -> None:
-    """Reset the in-memory collection handle for tests."""
-    global _collection
-    with _collection_lock:
-        _collection = None
+    """Reset the in-memory store handle for tests."""
+    global _store
+    with _store_lock:
+        _store = None
 
 
-def _stored_collection_is_valid(collection: chromadb.Collection) -> bool:
-    """True when the persisted store matches the current seed documents."""
-    if collection.count() != len(KNOWLEDGE_DOCUMENTS):
-        return False
-    metadata = collection.metadata or {}
-    return metadata.get(DOCUMENTS_HASH_KEY) == compute_documents_hash()
+def _store_path(persist_dir: Path) -> Path:
+    return persist_dir / STORE_FILENAME
 
 
-def _write_collection_metadata(collection: chromadb.Collection) -> None:
-    # Chroma rejects modify() calls that include hnsw:space after create.
-    collection.modify(metadata={DOCUMENTS_HASH_KEY: compute_documents_hash()})
+def _store_is_valid(store: KnowledgeStore) -> bool:
+    return (
+        store.count() == len(KNOWLEDGE_DOCUMENTS)
+        and store.documents_hash == compute_documents_hash()
+    )
+
+
+def _load_store(persist_dir: Path) -> Optional[KnowledgeStore]:
+    path = _store_path(persist_dir)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        store = KnowledgeStore(
+            documents_hash=payload["documents_hash"],
+            ids=payload["ids"],
+            documents=payload["documents"],
+            metadatas=payload["metadatas"],
+            embeddings=np.asarray(payload["embeddings"], dtype=np.float64),
+        )
+    except Exception:
+        logger.debug("RAG store file could not be loaded", exc_info=True)
+        return None
+
+    if not _store_is_valid(store):
+        logger.debug(
+            "RAG store ignored (count=%s, hash=%s)",
+            store.count(),
+            store.documents_hash,
+        )
+        return None
+    return store
+
+
+def _save_store(store: KnowledgeStore, persist_dir: Path) -> None:
+    persist_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "documents_hash": store.documents_hash,
+        "ids": store.ids,
+        "documents": store.documents,
+        "metadatas": store.metadatas,
+        "embeddings": store.embeddings.tolist(),
+    }
+    _store_path(persist_dir).write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
 
 
 def build_knowledge_base(
     embedder: Optional[GeminiEmbedder] = None,
     persist_dir: Optional[Path] = None,
     force_rebuild: bool = False,
-) -> chromadb.Collection:
-    """Build or load the persisted resume knowledge collection."""
-    global _collection
+) -> KnowledgeStore:
+    """Build or load the resume knowledge store."""
+    global _store
 
-    with _collection_lock:
-        if _collection is not None and not force_rebuild:
-            return _collection
+    with _store_lock:
+        if _store is not None and not force_rebuild and _store_is_valid(_store):
+            return _store
 
-        persist_path = persist_dir or CHROMA_PERSIST_DIR
-        persist_path.mkdir(parents=True, exist_ok=True)
-
-        client = chromadb.PersistentClient(path=str(persist_path))
-        if force_rebuild:
-            try:
-                client.delete_collection(COLLECTION_NAME)
-            except Exception:
-                logger.debug("RAG collection did not exist before force rebuild")
-
-        collection = client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"},
-        )
-
-        if _stored_collection_is_valid(collection) and not force_rebuild:
-            _collection = collection
-            return collection
+        target_dir = persist_dir or PERSIST_DIR
+        if not force_rebuild:
+            loaded = _load_store(target_dir)
+            if loaded is not None:
+                _store = loaded
+                return loaded
 
         embedder = embedder or GeminiEmbedder()
         ids = [doc["id"] for doc in KNOWLEDGE_DOCUMENTS]
@@ -214,46 +287,39 @@ def build_knowledge_base(
             {"category": doc["category"], "title": doc["title"]}
             for doc in KNOWLEDGE_DOCUMENTS
         ]
+        embeddings = np.asarray(
+            embedder.embed_batch(documents),
+            dtype=np.float64,
+        )
 
-        collection.upsert(
+        store = KnowledgeStore(
+            documents_hash=compute_documents_hash(),
             ids=ids,
             documents=documents,
             metadatas=metadatas,
-            embeddings=embedder.embed_batch(documents),
+            embeddings=embeddings,
         )
-        _write_collection_metadata(collection)
-        logger.info("RAG knowledge base ready with %s documents", collection.count())
+        _save_store(store, target_dir)
+        logger.info("RAG knowledge base ready with %s documents", store.count())
+        _store = store
+        return store
 
-        _collection = collection
-        return collection
 
+def get_store(persist_dir: Optional[Path] = None) -> Optional[KnowledgeStore]:
+    """Load an existing store without embedding new documents."""
+    global _store
 
-def get_collection(persist_dir: Optional[Path] = None) -> Optional[chromadb.Collection]:
-    """Load the existing collection without embedding new documents."""
-    global _collection
+    with _store_lock:
+        if _store is not None and _store_is_valid(_store):
+            return _store
 
-    with _collection_lock:
-        if _collection is not None:
-            return _collection
-
-        persist_path = persist_dir or CHROMA_PERSIST_DIR
-        if not persist_path.exists():
+        target_dir = persist_dir or PERSIST_DIR
+        loaded = _load_store(target_dir)
+        if loaded is None:
             return None
+        _store = loaded
+        return loaded
 
-        try:
-            client = chromadb.PersistentClient(path=str(persist_path))
-            collection = client.get_collection(COLLECTION_NAME)
-        except Exception:
-            logger.debug("RAG collection is not available yet", exc_info=True)
-            return None
 
-        if not _stored_collection_is_valid(collection):
-            logger.debug(
-                "RAG collection ignored (count=%s, hash=%s)",
-                collection.count(),
-                (collection.metadata or {}).get(DOCUMENTS_HASH_KEY),
-            )
-            return None
-
-        _collection = collection
-        return collection
+# Backwards-compatible alias used by older call sites / tests.
+get_collection = get_store

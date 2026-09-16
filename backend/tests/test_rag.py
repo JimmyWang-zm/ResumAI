@@ -2,6 +2,7 @@
 Tests for the resume RAG knowledge base and analyze job integration.
 """
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,15 +11,12 @@ import pytest
 from app.services.jobs.job_manager import Job, JobManager
 from app.services.prompt.builder import PromptBuilder
 from app.services.rag.embedder import GeminiEmbedder
-import chromadb
-
 from app.services.rag.knowledge_base import (
-    COLLECTION_NAME,
-    DOCUMENTS_HASH_KEY,
     KNOWLEDGE_DOCUMENTS,
+    STORE_FILENAME,
     build_knowledge_base,
     compute_documents_hash,
-    get_collection,
+    get_store,
     reset_knowledge_base,
 )
 from app.services.rag.retriever import MAX_QUERY_CHARS, _sync_retrieve, retrieve
@@ -92,17 +90,17 @@ class TestKnowledgeBase:
             assert doc["title"]
             assert doc["content"].strip()
 
-    def test_build_knowledge_base_populates_persisted_collection(self, tmp_path):
-        collection = build_knowledge_base(
+    def test_build_knowledge_base_populates_persisted_store(self, tmp_path):
+        store = build_knowledge_base(
             embedder=FakeEmbedder(),
-            persist_dir=tmp_path / ".chroma_db",
+            persist_dir=tmp_path / ".rag_store",
         )
 
-        assert collection.name == COLLECTION_NAME
-        assert collection.count() == len(KNOWLEDGE_DOCUMENTS)
+        assert store.count() == len(KNOWLEDGE_DOCUMENTS)
+        assert (tmp_path / ".rag_store" / STORE_FILENAME).exists()
 
     def test_build_knowledge_base_is_idempotent(self, tmp_path):
-        persist_dir = tmp_path / ".chroma_db"
+        persist_dir = tmp_path / ".rag_store"
         embedder = FakeEmbedder()
         embedder.batch_calls = 0
         original_batch = embedder.embed_batch
@@ -127,22 +125,22 @@ class TestKnowledgeBase:
         assert second.count() == len(KNOWLEDGE_DOCUMENTS)
         assert embedder.batch_calls == 1
 
-    def test_build_stores_documents_hash_metadata(self, tmp_path):
-        collection = build_knowledge_base(
+    def test_build_stores_documents_hash(self, tmp_path):
+        store = build_knowledge_base(
             embedder=FakeEmbedder(),
-            persist_dir=tmp_path / ".chroma_db",
+            persist_dir=tmp_path / ".rag_store",
         )
-        assert collection.metadata.get(DOCUMENTS_HASH_KEY) == compute_documents_hash()
+        assert store.documents_hash == compute_documents_hash()
 
     def test_rebuild_when_documents_hash_stale(self, tmp_path):
-        persist_dir = tmp_path / ".chroma_db"
-        embedder = FakeEmbedder()
-        build_knowledge_base(embedder=embedder, persist_dir=persist_dir)
+        persist_dir = tmp_path / ".rag_store"
+        build_knowledge_base(embedder=FakeEmbedder(), persist_dir=persist_dir)
         reset_knowledge_base()
 
-        client = chromadb.PersistentClient(path=str(persist_dir))
-        collection = client.get_collection(COLLECTION_NAME)
-        collection.modify(metadata={DOCUMENTS_HASH_KEY: "stale"})
+        path = persist_dir / STORE_FILENAME
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["documents_hash"] = "stale"
+        path.write_text(json.dumps(payload), encoding="utf-8")
 
         class CountingEmbedder(FakeEmbedder):
             batch_calls = 0
@@ -155,16 +153,17 @@ class TestKnowledgeBase:
         build_knowledge_base(embedder=CountingEmbedder(), persist_dir=persist_dir)
         assert CountingEmbedder.batch_calls == 1
 
-    def test_get_collection_rejects_partial_or_stale_store(self, tmp_path):
-        persist_dir = tmp_path / ".chroma_db"
+    def test_get_store_rejects_partial_or_stale_store(self, tmp_path):
+        persist_dir = tmp_path / ".rag_store"
         build_knowledge_base(embedder=FakeEmbedder(), persist_dir=persist_dir)
         reset_knowledge_base()
 
-        client = chromadb.PersistentClient(path=str(persist_dir))
-        collection = client.get_collection(COLLECTION_NAME)
-        collection.modify(metadata={DOCUMENTS_HASH_KEY: "stale"})
+        path = persist_dir / STORE_FILENAME
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["documents_hash"] = "stale"
+        path.write_text(json.dumps(payload), encoding="utf-8")
 
-        assert get_collection(persist_dir=persist_dir) is None
+        assert get_store(persist_dir=persist_dir) is None
 
 
 class TestRetriever:
@@ -172,12 +171,12 @@ class TestRetriever:
         reset_knowledge_base()
 
     def test_sync_retrieve_respects_top_k(self, tmp_path):
-        collection = build_knowledge_base(
+        store = build_knowledge_base(
             embedder=FakeEmbedder(),
-            persist_dir=tmp_path / ".chroma_db",
+            persist_dir=tmp_path / ".rag_store",
         )
 
-        with patch("app.services.rag.retriever.get_collection", return_value=collection):
+        with patch("app.services.rag.retriever.get_store", return_value=store):
             results = _sync_retrieve(
                 "Python resume with measurable API latency improvements",
                 top_k=3,
@@ -188,9 +187,9 @@ class TestRetriever:
         assert all(isinstance(result, str) for result in results)
 
     def test_sync_retrieve_truncates_long_query(self, tmp_path):
-        collection = build_knowledge_base(
+        store = build_knowledge_base(
             embedder=FakeEmbedder(),
-            persist_dir=tmp_path / ".chroma_db",
+            persist_dir=tmp_path / ".rag_store",
         )
 
         embedded_queries: list[str] = []
@@ -201,7 +200,7 @@ class TestRetriever:
                 return super().embed(text)
 
         long_query = "x" * (MAX_QUERY_CHARS + 500)
-        with patch("app.services.rag.retriever.get_collection", return_value=collection):
+        with patch("app.services.rag.retriever.get_store", return_value=store):
             _sync_retrieve(long_query, top_k=3, embedder=RecordingEmbedder())
 
         assert len(embedded_queries) == 1

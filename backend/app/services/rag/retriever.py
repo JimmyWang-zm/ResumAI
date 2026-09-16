@@ -7,7 +7,7 @@ import logging
 from typing import Optional
 
 from .embedder import GeminiEmbedder
-from .knowledge_base import build_knowledge_base, get_collection
+from .knowledge_base import build_knowledge_base, get_store
 
 logger = logging.getLogger(__name__)
 
@@ -24,16 +24,15 @@ def _sync_retrieve(
     top_k: int = DEFAULT_TOP_K,
     embedder: Optional[GeminiEmbedder] = None,
 ) -> list[str]:
-    """Run the blocking ChromaDB query path."""
+    """Run the blocking retrieval path (numpy cosine similarity)."""
     if not query or not query.strip():
         return []
 
-    collection = get_collection()
-    if collection is None:
-        collection = build_knowledge_base(embedder=embedder)
+    store = get_store()
+    if store is None:
+        store = build_knowledge_base(embedder=embedder)
 
-    total_docs = collection.count()
-    if total_docs == 0:
+    if store.count() == 0:
         return []
 
     embed_query = query.strip()
@@ -46,15 +45,10 @@ def _sync_retrieve(
         embed_query = embed_query[:MAX_QUERY_CHARS]
 
     embedder = embedder or GeminiEmbedder()
-    result = collection.query(
-        query_embeddings=[embedder.embed(embed_query)],
-        n_results=min(top_k, total_docs),
-        include=["documents", "metadatas", "distances"],
+    documents, metadatas, distances = store.query(
+        query_embedding=embedder.embed(embed_query),
+        top_k=min(top_k, store.count()),
     )
-
-    documents = result.get("documents", [[]])[0]
-    metadatas = result.get("metadatas", [[]])[0]
-    distances = result.get("distances", [[]])[0]
 
     for metadata, distance in zip(metadatas, distances):
         logger.debug(
