@@ -17,15 +17,20 @@ from app.services.rag import build_knowledge_base
 logger = logging.getLogger(__name__)
 
 
+async def _warm_rag_knowledge_base() -> None:
+    """Pre-warm RAG in the background so startup/Ready is not blocked."""
+    try:
+        await asyncio.to_thread(build_knowledge_base)
+    except Exception:
+        logger.warning("RAG knowledge base pre-warm skipped", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle management"""
     # Startup
     print(f"{settings.APP_NAME} v{settings.APP_VERSION} starting...")
-    try:
-        await asyncio.to_thread(build_knowledge_base)
-    except Exception:
-        logger.warning("RAG knowledge base pre-warm skipped", exc_info=True)
+    asyncio.create_task(_warm_rag_knowledge_base())
     job_manager = get_job_manager()
     await job_manager.start()  # RA-82: start background job worker
     yield

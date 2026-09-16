@@ -10,10 +10,15 @@ import pytest
 from app.services.jobs.job_manager import Job, JobManager
 from app.services.prompt.builder import PromptBuilder
 from app.services.rag.embedder import GeminiEmbedder
+import chromadb
+
 from app.services.rag.knowledge_base import (
     COLLECTION_NAME,
+    DOCUMENTS_HASH_KEY,
     KNOWLEDGE_DOCUMENTS,
     build_knowledge_base,
+    compute_documents_hash,
+    get_collection,
     reset_knowledge_base,
 )
 from app.services.rag.retriever import MAX_QUERY_CHARS, _sync_retrieve, retrieve
@@ -98,19 +103,68 @@ class TestKnowledgeBase:
 
     def test_build_knowledge_base_is_idempotent(self, tmp_path):
         persist_dir = tmp_path / ".chroma_db"
+        embedder = FakeEmbedder()
+        embedder.batch_calls = 0
+        original_batch = embedder.embed_batch
+
+        def counting_batch(texts):
+            embedder.batch_calls += 1
+            return original_batch(texts)
+
+        embedder.embed_batch = counting_batch
 
         first = build_knowledge_base(
-            embedder=FakeEmbedder(),
+            embedder=embedder,
             persist_dir=persist_dir,
         )
         reset_knowledge_base()
         second = build_knowledge_base(
-            embedder=FakeEmbedder(),
+            embedder=embedder,
             persist_dir=persist_dir,
         )
 
         assert first.count() == len(KNOWLEDGE_DOCUMENTS)
         assert second.count() == len(KNOWLEDGE_DOCUMENTS)
+        assert embedder.batch_calls == 1
+
+    def test_build_stores_documents_hash_metadata(self, tmp_path):
+        collection = build_knowledge_base(
+            embedder=FakeEmbedder(),
+            persist_dir=tmp_path / ".chroma_db",
+        )
+        assert collection.metadata.get(DOCUMENTS_HASH_KEY) == compute_documents_hash()
+
+    def test_rebuild_when_documents_hash_stale(self, tmp_path):
+        persist_dir = tmp_path / ".chroma_db"
+        embedder = FakeEmbedder()
+        build_knowledge_base(embedder=embedder, persist_dir=persist_dir)
+        reset_knowledge_base()
+
+        client = chromadb.PersistentClient(path=str(persist_dir))
+        collection = client.get_collection(COLLECTION_NAME)
+        collection.modify(metadata={DOCUMENTS_HASH_KEY: "stale"})
+
+        class CountingEmbedder(FakeEmbedder):
+            batch_calls = 0
+
+            def embed_batch(self, texts):
+                CountingEmbedder.batch_calls += 1
+                return super().embed_batch(texts)
+
+        reset_knowledge_base()
+        build_knowledge_base(embedder=CountingEmbedder(), persist_dir=persist_dir)
+        assert CountingEmbedder.batch_calls == 1
+
+    def test_get_collection_rejects_partial_or_stale_store(self, tmp_path):
+        persist_dir = tmp_path / ".chroma_db"
+        build_knowledge_base(embedder=FakeEmbedder(), persist_dir=persist_dir)
+        reset_knowledge_base()
+
+        client = chromadb.PersistentClient(path=str(persist_dir))
+        collection = client.get_collection(COLLECTION_NAME)
+        collection.modify(metadata={DOCUMENTS_HASH_KEY: "stale"})
+
+        assert get_collection(persist_dir=persist_dir) is None
 
 
 class TestRetriever:
