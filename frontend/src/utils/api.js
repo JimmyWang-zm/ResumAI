@@ -128,28 +128,6 @@ async function handleErrorResponse(response) {
 }
 
 /**
- * Map fetch/abort errors to ApiError and throw
- * @param {Error} error - Original error
- * @param {string} fallbackMessage - Message for unknown errors
- * @throws {ApiError}
- */
-function handleFetchError(error, fallbackMessage) {
-  if (error instanceof ApiError) {
-    throw error;
-  }
-
-  if (error.name === 'AbortError') {
-    throw new ApiError('Request cancelled', ErrorTypes.CANCELLED);
-  }
-
-  if (error.name === 'TypeError' && error.message.includes('fetch')) {
-    throw new ApiError('Network error. Please check your internet connection.', ErrorTypes.NETWORK_ERROR);
-  }
-
-  throw new ApiError(fallbackMessage, ErrorTypes.UNKNOWN_ERROR, error);
-}
-
-/**
  * @param {number} ms
  * @param {AbortSignal} [signal]
  * @returns {Promise<void>}
@@ -189,31 +167,41 @@ export async function pollJobResult(jobId, controller = null) {
       throw new ApiError('Request cancelled', ErrorTypes.CANCELLED);
     }
 
-    await sleep(POLL_INTERVAL_MS, signal);
-
+    let res;
     try {
-      const res = await fetch(`${API_BASE_URL}/jobs/${jobId}`, { signal });
-
-      if (res.status === 404) {
-        throw new ApiError('Job not found or result has expired. Please try again.', ErrorTypes.CLIENT_ERROR);
-      }
-      if (!res.ok) {
-        throw new ApiError(`Polling error: ${res.status}`, ErrorTypes.SERVER_ERROR);
-      }
-
-      const body = await res.json();
-      const { status, result, error } = body?.data ?? {};
-
-      if (status === 'completed') {
-        return result;
-      }
-      if (status === 'failed') {
-        throw new ApiError(error || 'Job processing failed. Please try again.', ErrorTypes.SERVER_ERROR);
-      }
-      // status === 'pending' or 'processing' — keep polling
+      res = await fetch(`${API_BASE_URL}/jobs/${jobId}`, { signal });
     } catch (error) {
-      handleFetchError(error, `Polling error for job ${jobId}`);
+      // Network error during fetch - log and continue polling
+      if (error.name === 'AbortError') {
+        throw new ApiError('Request cancelled', ErrorTypes.CANCELLED);
+      }
+      console.warn(`Fetch failed for job ${jobId}, retrying...`, error);
+      await sleep(POLL_INTERVAL_MS, signal);
+      continue;
     }
+
+    // Successfully got a response - now parse it
+    if (res.status === 404) {
+      throw new ApiError('Job not found or result has expired. Please try again.', ErrorTypes.CLIENT_ERROR);
+    }
+    if (!res.ok) {
+      throw new ApiError(`Polling error: ${res.status}`, ErrorTypes.SERVER_ERROR);
+    }
+
+    const body = await res.json();
+    const { status, result, error } = body?.data ?? {};
+
+    if (status === 'completed') {
+      // Ensure we return the result even if it's null/undefined
+      // The caller should handle empty results
+      return result !== undefined ? result : {};
+    }
+    if (status === 'failed') {
+      throw new ApiError(error || 'Job processing failed. Please try again.', ErrorTypes.SERVER_ERROR);
+    }
+    // status === 'pending' or 'processing' — keep polling
+
+    await sleep(POLL_INTERVAL_MS, signal);
   }
 
   throw new ApiError(
@@ -388,8 +376,8 @@ export async function analyzeResume(sessionId, controller = null) {
     const jobResult = await pollJobResult(jobId, internalController);
     return { status: 'ok', data: jobResult };
   } catch (error) {
-    console.error('Unexpected error in analyzeResume:', error);
-    handleFetchError(error, 'An unexpected error occurred. Please try again.');
+    console.error('Error in analyzeResume:', error);
+    throw error;  // Re-throw to caller
   }
 }
 
@@ -440,7 +428,8 @@ export async function matchResumeWithJob(sessionId, jobDescription, jobTitle = '
     const jobResult = await pollJobResult(jobId, internalController);
     return { status: 'ok', data: jobResult };
   } catch (error) {
-    handleFetchError(error, 'Match request failed. Please try again.');
+    console.error('Error in matchResumeWithJob:', error);
+    throw error;
   }
 }
 
@@ -489,6 +478,7 @@ export async function optimizeResume(sessionId, jobDescription = '', template = 
     const jobResult = await pollJobResult(jobId, internalController);
     return { status: 'ok', data: jobResult };
   } catch (error) {
-    handleFetchError(error, 'Optimization request failed. Please try again.');
+    console.error('Error in optimizeResume:', error);
+    throw error;
   }
 }
