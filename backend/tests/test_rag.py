@@ -10,7 +10,11 @@ import pytest
 
 from app.services.jobs.job_manager import Job, JobManager
 from app.services.prompt.builder import PromptBuilder
-from app.services.rag.embedder import GeminiEmbedder
+from app.services.rag.embedder import (
+    DOCUMENT_TASK_TYPE,
+    GeminiEmbedder,
+    QUERY_TASK_TYPE,
+)
 from app.services.rag.knowledge_base import (
     KNOWLEDGE_DOCUMENTS,
     STORE_FILENAME,
@@ -55,7 +59,24 @@ class TestGeminiEmbedder:
         embedder.model = "test-embedding-model"
 
         assert embedder.embed("resume text") == [0.1, 0.2, 0.3]
-        client.embed_query.assert_called_once_with("resume text")
+        client.embed_query.assert_called_once_with(
+            "resume text",
+            task_type=QUERY_TASK_TYPE,
+        )
+
+    def test_embed_batch_uses_retrieval_document_task_type(self):
+        client = MagicMock()
+        client.embed_documents.return_value = [[0.1], [0.2]]
+
+        embedder = GeminiEmbedder.__new__(GeminiEmbedder)
+        embedder.client = client
+        embedder.model = "test-embedding-model"
+
+        assert embedder.embed_batch(["a", "b"]) == [[0.1], [0.2]]
+        client.embed_documents.assert_called_once_with(
+            ["a", "b"],
+            task_type=DOCUMENT_TASK_TYPE,
+        )
 
     def test_embed_rejects_empty_text(self):
         embedder = GeminiEmbedder.__new__(GeminiEmbedder)
@@ -214,6 +235,17 @@ class TestRetriever:
     async def test_retrieve_degrades_to_empty_list_on_failure(self):
         with patch("app.services.rag.retriever._sync_retrieve", side_effect=RuntimeError):
             assert await retrieve("resume text") == []
+
+    @pytest.mark.asyncio
+    async def test_retrieve_times_out_without_blocking_forever(self):
+        def slow_retrieve(*_args, **_kwargs):
+            import time
+
+            time.sleep(1.0)
+            return ["should not return"]
+
+        with patch("app.services.rag.retriever._sync_retrieve", side_effect=slow_retrieve):
+            assert await retrieve("resume text", timeout_seconds=0.05) == []
 
 
 class TestPromptBuilderRagIntegration:

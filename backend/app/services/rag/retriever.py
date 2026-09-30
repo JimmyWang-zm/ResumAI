@@ -6,6 +6,8 @@ import asyncio
 import logging
 from typing import Optional
 
+from app.core.config import settings
+
 from .embedder import GeminiEmbedder
 from .knowledge_base import build_knowledge_base, get_store
 
@@ -65,13 +67,33 @@ async def retrieve(
     query: str,
     top_k: int = DEFAULT_TOP_K,
     embedder: Optional[GeminiEmbedder] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> list[str]:
-    """Retrieve relevant resume guidance without blocking the event loop."""
+    """Retrieve relevant resume guidance without blocking the event loop.
+
+    Embedding stalls must not block the serial job-queue worker: wrap the
+    sync path in ``asyncio.wait_for`` and degrade to no context on timeout.
+    """
     if not query or not query.strip():
         return []
 
+    timeout = (
+        settings.RAG_RETRIEVAL_TIMEOUT_SECONDS
+        if timeout_seconds is None
+        else timeout_seconds
+    )
+
     try:
-        results = await asyncio.to_thread(_sync_retrieve, query, top_k, embedder)
+        results = await asyncio.wait_for(
+            asyncio.to_thread(_sync_retrieve, query, top_k, embedder),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "RAG retrieval timed out after %.1fs; continuing without context",
+            timeout,
+        )
+        return []
     except Exception:
         logger.warning("RAG retrieval failed; continuing without context", exc_info=True)
         return []

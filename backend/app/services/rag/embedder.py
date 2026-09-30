@@ -12,6 +12,11 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 from app.core.config import settings
 
+# Explicit task types keep query/document vectors in the correct embedding space.
+# Some SDK defaults treat embed_query as RETRIEVAL_DOCUMENT; never rely on that.
+QUERY_TASK_TYPE = "RETRIEVAL_QUERY"
+DOCUMENT_TASK_TYPE = "RETRIEVAL_DOCUMENT"
+
 
 class GeminiEmbedder:
     """Small wrapper around the Gemini embedding API."""
@@ -28,12 +33,18 @@ class GeminiEmbedder:
         )
 
     def embed(self, text: str) -> list[float]:
-        """Embed a single non-empty string."""
+        """Embed a single non-empty query string."""
         if not text or not text.strip():
             raise ValueError("Cannot embed empty text")
 
-        return self.client.embed_query(text.strip())
+        return self.client.embed_query(
+            text.strip(),
+            task_type=QUERY_TASK_TYPE,
+        )
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed multiple strings in one batch call with deterministic ordering."""
-        return self.client.embed_documents([text.strip() for text in texts])
+        """Embed multiple document strings in one batch call."""
+        return self.client.embed_documents(
+            [text.strip() for text in texts],
+            task_type=DOCUMENT_TASK_TYPE,
+        )

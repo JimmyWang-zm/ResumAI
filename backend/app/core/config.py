@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     MAX_QUEUE_SIZE: int = 20
     RESULT_TTL_SECONDS: int = 1800  # 30 minutes
 
+    # RAG retrieval timeout (seconds). Stalls must not block the serial job worker.
+    RAG_RETRIEVAL_TIMEOUT_SECONDS: float = 10.0
+
 @lru_cache
 def get_settings() -> Settings:
     """Get cached settings instance"""
